@@ -50,16 +50,6 @@ local function field_declaration_query(declarator_wrapper)
 ]]
 end
 
-local function class_functions_query(declarator_wrapper)
-  return [[
-(class_specifier
-  (field_declaration_list
-]] .. field_declaration_query(declarator_wrapper) .. [[
-  )
-)
-]]
-end
-
 local function definitions_query(declarator_wrapper)
   return [[
 (function_definition
@@ -327,10 +317,10 @@ end
 
 local function node_get_declarations(bufnr, node)
   return tables.merge_arrays(
-    run_query(bufnr, node, class_functions_query()),
-    run_query(bufnr, node, class_functions_query("reference_declarator"),
+    run_query(bufnr, node, field_declaration_query()),
+    run_query(bufnr, node, field_declaration_query("reference_declarator"),
       { ret_type_reference = true }),
-    run_query(bufnr, node, class_functions_query("pointer_declarator"),
+    run_query(bufnr, node, field_declaration_query("pointer_declarator"),
       { ret_type_pointer = true }),
     run_query(bufnr, node, declaration_query()),
     run_query(bufnr, node, declaration_query("reference_declarator"),
