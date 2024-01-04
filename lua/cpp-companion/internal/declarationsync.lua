@@ -1,8 +1,9 @@
+local config = require("cpp-companion.internal.config")
 local nodes = require("cpp-companion.internal.nodes")
 local strings = require("cpp-companion.internal.strings")
 local tables = require("cpp-companion.internal.tables")
 local selection = require("cpp-companion.internal.selection")
-local d = require("cpp-companion.internal.dlog")("cpp-butler");
+local d = require("cpp-companion.internal.dlog")("cpp-companion");
 local log_found_functions = false
 
 local M = {}
@@ -19,8 +20,7 @@ local function_type_query = [[
 local function function_declarator_query(wrapper)
   local query = [[
 (function_declarator
-  [(identifier) (field_identifier)]? @func_name
-  (qualified_identifier)? @func_qual_id
+  [(identifier) (field_identifier) (qualified_identifier)]? @func_name
   (parameter_list) @func_params
 )
 ]]
@@ -67,6 +67,25 @@ local function definitions_query(declarator_wrapper)
 ]] .. function_declarator_query(declarator_wrapper) .. [[
 ) @func
 ]]
+end
+
+local function get_lib_bufs(lib)
+  local bufs = {}
+  for _, h in ipairs(lib.headers) do
+    d("resolved lib header file %s", h)
+    if vim.fn.filereadable(h) then
+      local uri = vim.uri_from_fname(h)
+      table.insert(bufs, vim.uri_to_bufnr(uri))
+    end
+  end
+  for _, s in ipairs(lib.sources) do
+    d("resolved lib source file %s", s)
+    if vim.fn.filereadable(s) then
+      local uri = vim.uri_from_fname(s)
+      table.insert(bufs, vim.uri_to_bufnr(uri))
+    end
+  end
+  return bufs
 end
 
 local function collect_named_parents(bufnr, node, parent_type, parent_name_type)
@@ -268,15 +287,18 @@ local function run_query(bufnr, node, query_str, opts)
         func.type = func.type .. "*"
       end
     elseif query.captures[id] == "func_name" then
-      func.name = vim.treesitter.get_node_text(n, bufnr)
-    elseif query.captures[id] == "func_qual_id" then
-      local qual_id = vim.treesitter.get_node_text(n, bufnr)
-      local parts = vim.split(qual_id, "::")
-      func.classes = {}
-      for i = 1, #parts - 1 do
-        table.insert(func.classes, parts[i])
+      local name = vim.treesitter.get_node_text(n, bufnr)
+      if not string.find(name, "::") then
+        func.name = name
+      else
+        -- Otherwise, this is a qualified name in the definition.
+        local parts = vim.split(name, "::")
+        func.classes = {}
+        for i = 1, #parts - 1 do
+          table.insert(func.classes, parts[i])
+        end
+        func.name = parts[#parts]
       end
-      func.name = parts[#parts]
     elseif query.captures[id] == "func_params" then
       func.params = vim.treesitter.get_node_text(n, bufnr)
       local type_node = nodes.get_next_node(n)
@@ -424,43 +446,26 @@ local function update_definition_node(def, decl)
   vim.notify("Updated definition " .. fully_qualified_name(decl))
 end
 
-function M.is_header_file(bufnr)
-  bufnr = bufnr or 0
-  local filename = vim.api.nvim_buf_get_name(0)
-  return vim.fn.fnamemodify(filename, ":e") == "h"
-end
-
 function M.sibling_dot_h_header_locator(bufnr)
   bufnr = bufnr or 0
   local filename = vim.api.nvim_buf_get_name(bufnr)
   return vim.fn.fnamemodify(filename, ":r") .. ".h"
 end
 
-function M.find_header_bufnr(bufnr)
-  bufnr = bufnr or 0
-  if M.is_header_file(bufnr) then
-    return nil
-  end
-  local header_file = M.sibling_dot_h_header_locator(bufnr)
-  if not vim.fn.filereadable(header_file) then
-    return nil
-  end
-  local uri = vim.uri_from_fname(header_file)
-  return vim.uri_to_bufnr(uri)
-end
-
 function M.get_declarations(bufnr)
-  local declarations = buf_get_declarations(bufnr)
-  local header_bufnr = M.find_header_bufnr(bufnr)
-  if header_bufnr ~= nil then
-    declarations = tables.merge_arrays(declarations,
-      buf_get_declarations(header_bufnr))
+  bufnr = bufnr or 0
+  local declarations = {}
+  local file_path = vim.api.nvim_buf_get_name(bufnr)
+  local lib = config.get().lib_resolver(file_path)
+  local bufs = get_lib_bufs(lib)
+  for _, b in ipairs(bufs) do
+    declarations = tables.merge_arrays(declarations, buf_get_declarations(b))
   end
   return declarations
 end
 
 function M.insert_definition()
-  local declarations = M.get_declarations()
+  local declarations = M.get_declarations(0)
   local function insert_signature(decl)
     local body, has_return = definition_body(decl)
     vim.api.nvim_put(body, "c", false, false)
@@ -535,11 +540,12 @@ end
 
 function M.get_definitions(bufnr)
   bufnr = bufnr or 0
-  local definitions = buf_get_definitions(bufnr)
-  local header_bufnr = M.find_header_bufnr(bufnr)
-  if header_bufnr ~= nil then
-    definitions = tables.merge_arrays(definitions,
-      buf_get_definitions(header_bufnr))
+  local definitions = {}
+  local file_path = vim.api.nvim_buf_get_name(bufnr)
+  local lib = config.get().lib_resolver(file_path)
+  local bufs = get_lib_bufs(lib)
+  for _, b in ipairs(bufs) do
+    definitions = tables.merge_arrays(definitions, buf_get_definitions(b))
   end
   return definitions
 end
@@ -613,7 +619,7 @@ function M.sync_declaration_and_definition()
     M.update_definition(declaration)
     return
   end
-  vim.notify("Could not find a single function definition or declaration at the cursor", vim.log.levels.INFO)
+  vim.notify("Could not find a single function definition or declaration at the cursor position", vim.log.levels.INFO)
 end
 
 return M
