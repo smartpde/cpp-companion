@@ -3,7 +3,8 @@ local nodes = require("cpp-companion.internal.nodes")
 local strings = require("cpp-companion.internal.strings")
 local tables = require("cpp-companion.internal.tables")
 local selection = require("cpp-companion.internal.selection")
-local d = require("cpp-companion.internal.dlog")("cpp-companion");
+local dlog = require("cpp-companion.internal.dlog")
+local d = dlog.logger("cpp-companion")
 local log_found_functions = false
 
 local M = {}
@@ -12,9 +13,23 @@ local function wrap_query(query, wrapper)
   return "(" .. wrapper .. " " .. query .. ")"
 end
 
+local function debug_node_text(node, bufnr)
+  if dlog.is_enabled("cpp-companion") then
+    return vim.treesitter.get_node_text(node, bufnr)
+  end
+  return ""
+end
+
+local return_types = { "primitive_type", "qualified_identifier", "template_type", "type_identifier" }
+
 local function_type_query = [[
   (type_qualifier)? @func_type_qualifier
-  [(primitive_type) (qualified_identifier) (template_type) (type_identifier)] @func_type
+  []]
+    .. table.concat(
+      tables.map(return_types, function(t) return strings.surround(t, "(", ")") end),
+      " "
+    )
+    .. [[] @func_type
 ]]
 
 local function function_declarator_query(wrapper)
@@ -425,15 +440,20 @@ local function update_declaration_node(decl, def)
 end
 
 local function update_definition_node(def, decl)
-  local type_node = nodes.find_child_by_one_of_types(def.node, { "primitive_type", "qualified_identifier" })
+  local type_node = nodes.find_child_by_one_of_types(def.node, return_types)
   if type_node then
-    nodes.update_node_text(def.bufnr, type_node, { decl.type })
+    d("updating type node %s with %s", debug_node_text(type_node, def.bufnr), decl.type)
+    nodes.update_node_text(def.bufnr, type_node, { decl.type .. " " })
   end
-  local declarator_node = nodes.find_child_by_type(def.node, "function_declarator")
+  local declarator_node = nodes.find_child_by_one_of_types(def.node,
+    { "function_declarator", "reference_declarator", "pointer_declarator" })
   if declarator_node then
+    d("updating declarator node %s", debug_node_text(declarator_node, def.bufnr))
     nodes.update_node_text(def.bufnr, declarator_node, function_declarator(decl))
+    vim.notify("Updated definition " .. fully_qualified_name(decl))
+  else
+    vim.notify("Could not find definition " .. fully_qualified_name(decl), vim.log.levels.ERROR)
   end
-  vim.notify("Updated definition " .. fully_qualified_name(decl))
 end
 
 function M.sibling_dot_h_header_locator(bufnr)

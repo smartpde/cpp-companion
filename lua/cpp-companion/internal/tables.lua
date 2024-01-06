@@ -11,4 +11,12 @@ function M.merge_arrays(...)
   return result
 end
 
+function M.map(array, f)
+  local result = {}
+  for _, entry in ipairs(array) do
+    table.insert(result, f(entry))
+  end
+  return result
+end
+
 return M

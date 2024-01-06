@@ -20,10 +20,6 @@ function M.find_child_by_type(node, child_type)
     if child:type() == child_type then
       return child
     end
-    local res = M.find_child_by_type(child, child_type)
-    if res then
-      return res
-    end
   end
   return nil
 end
