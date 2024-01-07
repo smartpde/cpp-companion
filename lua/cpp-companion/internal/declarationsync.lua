@@ -74,20 +74,34 @@ local function definitions_query(declarator_wrapper)
 ]]
 end
 
-local function get_lib_bufs(lib)
+local function get_lib_bufs(bufnr)
   local bufs = {}
+  table.insert(bufs, bufnr)
+  local file_path = vim.api.nvim_buf_get_name(bufnr)
+  if file_path == "" then
+    -- file not saved yet
+    return bufs
+  end
+  file_path = vim.fs.normalize_path(file_path)
+  local lib = config.get().lib_resolver(file_path)
   for _, h in ipairs(lib.headers) do
-    d("resolved lib header file %s", h)
-    if vim.fn.filereadable(h) then
-      local uri = vim.uri_from_fname(h)
-      table.insert(bufs, vim.uri_to_bufnr(uri))
+    h = vim.fs.normalize_path(h)
+    if h ~= file_path then
+      d("resolved lib header file %s", h)
+      if vim.fn.filereadable(h) then
+        local uri = vim.uri_from_fname(h)
+        table.insert(bufs, vim.uri_to_bufnr(uri))
+      end
     end
   end
   for _, s in ipairs(lib.sources) do
-    d("resolved lib source file %s", s)
-    if vim.fn.filereadable(s) then
-      local uri = vim.uri_from_fname(s)
-      table.insert(bufs, vim.uri_to_bufnr(uri))
+    s = vim.fs.normalize_path(s)
+    if s ~= file_path then
+      d("resolved lib source file %s", s)
+      if vim.fn.filereadable(s) then
+        local uri = vim.uri_from_fname(s)
+        table.insert(bufs, vim.uri_to_bufnr(uri))
+      end
     end
   end
   return bufs
@@ -214,7 +228,7 @@ local function function_declarator(decl)
   return strings.split(signature, "\n")
 end
 
-local function func_display(func)
+function M.func_display(func)
   local signature = ""
   local namespaces = qualifier(func.namespaces)
   if namespaces ~= "" then
@@ -235,7 +249,8 @@ local function func_display(func)
   if func.type_qualifier then
     signature = signature .. " " .. func.type_qualifier
   end
-  return string.gsub(signature, "\n", " ")
+  local result = string.gsub(signature, "\n", " ")
+  return result
 end
 
 local function find_unmatched_declarations(declarations, definitions)
@@ -315,7 +330,7 @@ local function run_query(bufnr, node, query_str, opts)
   d("found %d functions", #functions)
   if log_found_functions then
     for i, f in ipairs(functions) do
-      d("%d: %s", i, func_display(f))
+      d("%d: %s", i, M.func_display(f))
     end
   end
   return functions
@@ -465,9 +480,7 @@ end
 function M.get_declarations(bufnr)
   bufnr = bufnr or 0
   local declarations = {}
-  local file_path = vim.api.nvim_buf_get_name(bufnr)
-  local lib = config.get().lib_resolver(file_path)
-  local bufs = get_lib_bufs(lib)
+  local bufs = get_lib_bufs(bufnr)
   for _, b in ipairs(bufs) do
     declarations = tables.merge_arrays(declarations, buf_get_declarations(b))
   end
@@ -500,7 +513,7 @@ function M.insert_definition()
     prompt = "Select function declaration",
     values = declarations,
     entry_func = function(decl)
-      local signature = func_display(decl)
+      local signature = M.func_display(decl)
       local start_line = decl.node:start()
       return {
         value = signature,
@@ -551,9 +564,7 @@ end
 function M.get_definitions(bufnr)
   bufnr = bufnr or 0
   local definitions = {}
-  local file_path = vim.api.nvim_buf_get_name(bufnr)
-  local lib = config.get().lib_resolver(file_path)
-  local bufs = get_lib_bufs(lib)
+  local bufs = get_lib_bufs(bufnr)
   for _, b in ipairs(bufs) do
     definitions = tables.merge_arrays(definitions, buf_get_definitions(b))
   end
@@ -572,7 +583,7 @@ function M.update_declaration(definition)
     values = selection.to_ordinal_pairs(declarations),
     entry_func = function(pair)
       local decl = pair.item
-      local signature = func_display(decl)
+      local signature = M.func_display(decl)
       local start_line = decl.node:start()
       return {
         value = signature,
@@ -601,7 +612,7 @@ function M.update_definition(decl)
     values = selection.to_ordinal_pairs(definitions),
     entry_func = function(pair)
       local def = pair.item
-      local signature = func_display(def)
+      local signature = M.func_display(def)
       local start_line = def.node:start()
       return {
         value = signature,
