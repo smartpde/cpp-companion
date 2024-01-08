@@ -20,7 +20,8 @@ local function debug_node_text(node, bufnr)
 end
 
 local return_types = { "primitive_type", "qualified_identifier", "template_type", "type_identifier" }
-local possible_declarators = { "pointer_declarator", "reference_declarator", "function_declarator", "init_declarator" }
+local possible_declarators = { "ERROR", "pointer_declarator", "reference_declarator", "function_declarator",
+  "init_declarator" }
 
 local function_type_query = [[
   (type_qualifier)? @func_type_qualifier
@@ -284,15 +285,26 @@ local function eat_any_child(scanner, node_types)
 end
 
 local function unwrap_declarator(node, func)
-  while node:type() ~= "function_declarator" and node:type() ~= "init_declarator" do
+  while node and node:type() ~= "function_declarator"
+    and node:type() ~= "init_declarator"
+  do
     if node:type() == "pointer_declarator" then
       func.type = func.type .. "*"
       node = nodes.find_child_by_one_of_types(node, possible_declarators)
     elseif node:type() == "reference_declarator" then
       func.type = func.type .. "&"
       node = nodes.find_child_by_one_of_types(node, possible_declarators)
+    elseif node:type() == "ERROR" then
+      -- special case for `type* Func() ABSL_GUARDED_BY(mutex)`, which is not
+      -- a valid syntax
+      local declarator = nodes.find_child_by_one_of_types(node,
+        { "function_declarator", "init_declarator" })
+      if declarator then
+        return declarator
+      end
     else
-      error("Unxepected child in function declarator " .. vim.treesitter.get_node_text(node, func.buf))
+      error("Unxepected child in function declarator "
+      .. vim.treesitter.get_node_text(node, func.buf))
     end
   end
   return node
@@ -339,6 +351,9 @@ local function parse_init_declarator(node, func)
 end
 
 local function parse_function(node, buf)
+  if dlog.is_enabled("cpp-companion") then
+    d("parse_function node: %s", vim.treesitter.get_node_text(node, buf))
+  end
   local func = {
     buf = buf,
     namespaces = collect_named_parents(buf, node, "namespace_definition", "namespace_identifier"),

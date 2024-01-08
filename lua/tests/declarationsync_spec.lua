@@ -91,6 +91,15 @@ void Func(int a) ABSL_GUARDED_BY(mutex_);
         })
     end)
 
+    it("declaration with thread annotation return pointer", function()
+      check_declarations([[
+int* Func() ABSL_GUARDED_BY(mutex_);
+]],
+        {
+          "int* Func()",
+        })
+    end)
+
     it("declaration with params", function()
       check_declarations([[
 void Func(int a, std::string b);
