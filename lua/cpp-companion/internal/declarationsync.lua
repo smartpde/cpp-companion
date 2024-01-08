@@ -5,7 +5,6 @@ local tables = require("cpp-companion.internal.tables")
 local selection = require("cpp-companion.internal.selection")
 local dlog = require("cpp-companion.internal.dlog")
 local d = dlog.logger("cpp-companion")
-local log_found_functions = false
 
 local M = {}
 
@@ -21,6 +20,7 @@ local function debug_node_text(node, bufnr)
 end
 
 local return_types = { "primitive_type", "qualified_identifier", "template_type", "type_identifier" }
+local possible_declarators = { "pointer_declarator", "reference_declarator", "function_declarator", "init_declarator" }
 
 local function_type_query = [[
   (type_qualifier)? @func_type_qualifier
@@ -43,26 +43,6 @@ local function function_declarator_query(wrapper)
     query = wrap_query(query, wrapper)
   end
   return query
-end
-
-local function declaration_query(declarator_wrapper)
-  return [[
-(declaration
-]] .. function_type_query .. [[
-]] .. function_declarator_query(declarator_wrapper) .. [[
-) @func
-]]
-end
-
-local function field_declaration_query(declarator_wrapper)
-  return [[
-(field_declaration
-  (virtual)? @virtual
-  (storage_class_specifier)? @storage_class
-]] .. function_type_query .. [[
-]] .. function_declarator_query(declarator_wrapper) .. [[
-) @func
-]]
 end
 
 local function definitions_query(declarator_wrapper)
@@ -271,64 +251,149 @@ local function find_unmatched_declarations(declarations, definitions)
   return unmatched
 end
 
+local function make_child_scanner(node)
+  return { node = node, index = 0 }
+end
+
+local function eat_child(scanner, node_type)
+  if scanner.index >= scanner.node:child_count() then
+    return nil
+  end
+  local child = scanner.node:child(scanner.index)
+  if child:type() == node_type then
+    scanner.index = scanner.index + 1
+    return child
+  end
+  d("eat_child %s but found %s", node_type, child:type())
+  return nil
+end
+
+local function eat_any_child(scanner, node_types)
+  if scanner.index >= scanner.node:child_count() then
+    return nil
+  end
+  local child = scanner.node:child(scanner.index)
+  for _, node_type in ipairs(node_types) do
+    if child:type() == node_type then
+      scanner.index = scanner.index + 1
+      return child
+    end
+  end
+  d("eat_any_child %s but found %s", vim.inspect(node_types), child:type())
+  return nil
+end
+
+local function unwrap_declarator(node, func)
+  while node:type() ~= "function_declarator" and node:type() ~= "init_declarator" do
+    if node:type() == "pointer_declarator" then
+      func.type = func.type .. "*"
+      node = nodes.find_child_by_one_of_types(node, possible_declarators)
+    elseif node:type() == "reference_declarator" then
+      func.type = func.type .. "&"
+      node = nodes.find_child_by_one_of_types(node, possible_declarators)
+    else
+      error("Unxepected child in function declarator " .. vim.treesitter.get_node_text(node, func.buf))
+    end
+  end
+  return node
+end
+
+local function parse_function_declarator(node, func)
+  local scanner = make_child_scanner(node)
+  local identifier = eat_any_child(scanner, { "identifier", "field_identifier" })
+  if identifier then
+    func.name = vim.treesitter.get_node_text(identifier, func.buf)
+  end
+  local qualified_identifier = eat_child(scanner, "qualified_identifier")
+  if qualified_identifier then
+    local parts = vim.split(vim.treesitter.get_node_text(qualified_identifier, func.buf), "::")
+    for i = 1, #parts - 1 do
+      table.insert(func.classes, parts[i])
+    end
+    func.name = parts[#parts]
+  end
+  local params = eat_child(scanner, "parameter_list")
+  if params then
+    func.params = vim.treesitter.get_node_text(params, func.buf)
+  end
+  local type_qualifier = eat_child(scanner, "type_qualifier")
+  if type_qualifier then
+    func.type_qualifier = vim.treesitter.get_node_text(type_qualifier, func.buf)
+  end
+end
+
+local function parse_init_declarator(node, func)
+  local scanner = make_child_scanner(node)
+  local identifier = eat_child(scanner, "identifier")
+  if identifier then
+    func.name = vim.treesitter.get_node_text(identifier, func.buf)
+  end
+  local params = eat_child(scanner, "argument_list")
+  if params then
+    func.params = vim.treesitter.get_node_text(params, func.buf)
+  end
+  local type_qualifier = eat_child(scanner, "type_qualifier")
+  if type_qualifier then
+    func.type_qualifier = vim.treesitter.get_node_text(type_qualifier, func.buf)
+  end
+end
+
+local function parse_function(node, buf)
+  local func = {
+    buf = buf,
+    namespaces = collect_named_parents(buf, node, "namespace_definition", "namespace_identifier"),
+    classes = collect_named_parents(buf, node, "class_specifier", "type_identifier"),
+    type = "",
+    name = "",
+    params = "",
+    has_semicolon = string.sub(vim.treesitter.get_node_text(node, buf), -1) == ";",
+  }
+  local scanner = make_child_scanner(node)
+  local type_qualifier = eat_child(scanner, "type_qualifier")
+  if type_qualifier then
+    func.type = vim.treesitter.get_node_text(type_qualifier, func.buf) .. " "
+  end
+  local type = eat_any_child(scanner, return_types)
+  if type then
+    func.type = func.type .. vim.treesitter.get_node_text(type, func.buf)
+  end
+  local declarator = eat_any_child(scanner, possible_declarators)
+  if not declarator then
+    -- special case for `void Func() ABSL_GUARDED_BY(mutex)`
+    -- this is not a valid syntax, but a common one
+    local error_declarator = eat_child(scanner, "ERROR")
+    if error_declarator then
+      declarator = nodes.find_child_by_type(error_declarator, "init_declarator")
+    end
+  end
+  if not declarator then
+    return nil
+  end
+  declarator = unwrap_declarator(declarator, func)
+  if not declarator then
+    return nil
+  end
+  if declarator:type() == "function_declarator" then
+    parse_function_declarator(declarator, func)
+  elseif declarator:type() == "init_declarator" then
+    parse_init_declarator(declarator, func)
+  end
+  return func
+end
+
 local function run_query(bufnr, node, query_str, opts)
   d("running query %s", query_str)
   opts = opts or {}
   local query = vim.treesitter.query.parse("cpp", query_str)
-  local func
   local functions = {}
-  local func_type_qualifier = nil
-  for id, n in query:iter_captures(node, bufnr) do
-    if query.captures[id] == "func" then
-      func = {
-        bufnr = bufnr,
-        node = n,
-        classes = collect_named_parents(bufnr, n, "class_specifier", "type_identifier"),
-        namespaces = collect_named_parents(bufnr, n, "namespace_definition", "namespace_identifier"),
-        has_semicolon = string.sub(vim.treesitter.get_node_text(n, bufnr), -1) == ";",
-      }
+  for _, n in query:iter_captures(node, bufnr) do
+    local func = parse_function(n, bufnr)
+    if func then
       table.insert(functions, func)
-      func_type_qualifier = nil
-    elseif query.captures[id] == "virtual" then
-      func.virtual = true
-    elseif query.captures[id] == "storage_class" then
-      func.storage_class = vim.treesitter.get_node_text(n, bufnr)
-    elseif query.captures[id] == "func_type_qualifier" then
-      func.ret_type_qualifier = vim.treesitter.get_node_text(n, bufnr)
-    elseif query.captures[id] == "func_type" then
-      func.type = vim.treesitter.get_node_text(n, bufnr)
-      if func_type_qualifier then
-        func.type = func_type_qualifier .. " " .. func.type
-      end
-      if opts.ret_type_reference then
-        func.type = func.type .. "&"
-      end
-      if opts.ret_type_pointer then
-        func.type = func.type .. "*"
-      end
-    elseif query.captures[id] == "func_name" then
-      local name = vim.treesitter.get_node_text(n, bufnr)
-      if not string.find(name, "::") then
-        func.name = name
-      else
-        -- Otherwise, this is a qualified name in the definition.
-        local parts = vim.split(name, "::")
-        func.classes = {}
-        for i = 1, #parts - 1 do
-          table.insert(func.classes, parts[i])
-        end
-        func.name = parts[#parts]
-      end
-    elseif query.captures[id] == "func_params" then
-      func.params = vim.treesitter.get_node_text(n, bufnr)
-      local type_node = nodes.get_next_node(n)
-      if type_node then
-        func.type_qualifier = vim.treesitter.get_node_text(type_node, bufnr)
-      end
     end
   end
-  d("found %d functions", #functions)
-  if log_found_functions then
+  if dlog.is_enabled("cpp-companion") then
+    d("found %d functions", #functions)
     for i, f in ipairs(functions) do
       d("%d: %s", i, M.func_display(f))
     end
@@ -347,16 +412,8 @@ end
 
 local function node_get_declarations(bufnr, node)
   return tables.merge_arrays(
-    run_query(bufnr, node, field_declaration_query()),
-    run_query(bufnr, node, field_declaration_query("reference_declarator"),
-      { ret_type_reference = true }),
-    run_query(bufnr, node, field_declaration_query("pointer_declarator"),
-      { ret_type_pointer = true }),
-    run_query(bufnr, node, declaration_query()),
-    run_query(bufnr, node, declaration_query("reference_declarator"),
-      { ret_type_reference = true }),
-    run_query(bufnr, node, declaration_query("pointer_declarator"),
-      { ret_type_pointer = true }))
+    run_query(bufnr, node, "(field_declaration) @decl"),
+    run_query(bufnr, node, "(declaration) @decl"))
 end
 
 local function is_same_qualified_id(a, b)

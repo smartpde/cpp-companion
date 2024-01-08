@@ -55,6 +55,42 @@ absl::StatusOr<int> Func();
         })
     end)
 
+    it("declaration with const type", function()
+      check_declarations([[
+const Type Func();
+]],
+        {
+          "const Type Func()",
+        })
+    end)
+
+    it("declaration const func type", function()
+      check_declarations([[
+void Func() const;
+]],
+        {
+          "void Func() const",
+        })
+    end)
+
+    it("declaration with thread annotation", function()
+      check_declarations([[
+void Func() ABSL_GUARDED_BY(mutex_);
+]],
+        {
+          "void Func()",
+        })
+    end)
+
+    it("declaration with thread annotation and param", function()
+      check_declarations([[
+void Func(int a) ABSL_GUARDED_BY(mutex_);
+]],
+        {
+          "void Func(int a)",
+        })
+    end)
+
     it("declaration with params", function()
       check_declarations([[
 void Func(int a, std::string b);
@@ -80,6 +116,35 @@ void Func(
 ]],
         {
           [[void Func(int a, std::string b)]],
+        })
+    end)
+
+    it("declaration in namespace", function()
+      check_declarations([[
+namespace n1 {
+namespace n2 {
+  void Func();
+}
+}
+]],
+        {
+          "n1::n2 void Func()",
+        })
+    end)
+
+    it("declaration in class", function()
+      check_declarations([[
+namespace n1 {
+class C1 {
+class C2 {
+ public:
+  void Func();
+};
+};
+}
+]],
+        {
+          "n1 void C1::C2::Func()",
         })
     end)
   end)
