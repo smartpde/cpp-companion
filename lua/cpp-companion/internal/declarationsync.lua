@@ -8,65 +8,30 @@ local d = dlog.logger("cpp-companion")
 
 local M = {}
 
-local function wrap_query(query, wrapper)
-  return "(" .. wrapper .. " " .. query .. ")"
-end
-
-local function debug_node_text(node, bufnr)
+local function debug_node_text(node, buf)
   if dlog.is_enabled("cpp-companion") then
-    return vim.treesitter.get_node_text(node, bufnr)
+    return vim.treesitter.get_node_text(node, buf)
   end
   return ""
 end
 
-local return_types = { "primitive_type", "qualified_identifier", "template_type", "type_identifier" }
-local possible_declarators = { "ERROR", "pointer_declarator", "reference_declarator", "function_declarator",
-  "init_declarator" }
+local possible_return_types = { "primitive_type", "qualified_identifier",
+  "template_type", "type_identifier" }
+local possible_declarators = { "ERROR", "pointer_declarator",
+  "reference_declarator", "function_declarator", "init_declarator" }
 
-local function_type_query = [[
-  (type_qualifier)? @func_type_qualifier
-  []]
-    .. table.concat(
-      tables.map(return_types, function(t) return strings.surround(t, "(", ")") end),
-      " "
-    )
-    .. [[] @func_type
-]]
-
-local function function_declarator_query(wrapper)
-  local query = [[
-(function_declarator
-  [(identifier) (field_identifier) (qualified_identifier)]? @func_name
-  (parameter_list) @func_params
-)
-]]
-  if wrapper then
-    query = wrap_query(query, wrapper)
-  end
-  return query
-end
-
-local function definitions_query(declarator_wrapper)
-  return [[
-(function_definition
-]] .. function_type_query .. [[
-]] .. function_declarator_query(declarator_wrapper) .. [[
-) @func
-]]
-end
-
-local function get_lib_bufs(bufnr)
+local function get_lib_bufs(buf)
   local bufs = {}
-  table.insert(bufs, bufnr)
-  local file_path = vim.api.nvim_buf_get_name(bufnr)
-  if file_path == "" then
+  table.insert(bufs, buf)
+  local file_path = vim.api.nvim_buf_get_name(buf)
+  if not file_path or file_path == "" then
     -- file not saved yet
     return bufs
   end
-  file_path = vim.fs.normalize_path(file_path)
+  file_path = vim.fs.normalize(file_path)
   local lib = config.get().lib_resolver(file_path)
   for _, h in ipairs(lib.headers) do
-    h = vim.fs.normalize_path(h)
+    h = vim.fs.normalize(h)
     if h ~= file_path then
       d("resolved lib header file %s", h)
       if vim.fn.filereadable(h) then
@@ -76,7 +41,7 @@ local function get_lib_bufs(bufnr)
     end
   end
   for _, s in ipairs(lib.sources) do
-    s = vim.fs.normalize_path(s)
+    s = vim.fs.normalize(s)
     if s ~= file_path then
       d("resolved lib source file %s", s)
       if vim.fn.filereadable(s) then
@@ -88,7 +53,7 @@ local function get_lib_bufs(bufnr)
   return bufs
 end
 
-local function collect_named_parents(bufnr, node, parent_type, parent_name_type)
+local function collect_named_parents(buf, node, parent_type, parent_name_type)
   local result = {}
   local parent_node = node
   while true do
@@ -96,7 +61,7 @@ local function collect_named_parents(bufnr, node, parent_type, parent_name_type)
     if not parent_node then break end
     local name_node = nodes.find_child_by_type(parent_node, parent_name_type)
     assert(name_node, "Could not find name node")
-    table.insert(result, 1, vim.treesitter.get_node_text(name_node, bufnr))
+    table.insert(result, 1, vim.treesitter.get_node_text(name_node, buf))
   end
   return result
 end
@@ -318,7 +283,8 @@ local function parse_function_declarator(node, func)
   end
   local qualified_identifier = eat_child(scanner, "qualified_identifier")
   if qualified_identifier then
-    local parts = vim.split(vim.treesitter.get_node_text(qualified_identifier, func.buf), "::")
+    local parts = vim.split(vim.treesitter.get_node_text(
+      qualified_identifier, func.buf), "::")
     for i = 1, #parts - 1 do
       table.insert(func.classes, parts[i])
     end
@@ -356,6 +322,7 @@ local function parse_function(node, buf)
   end
   local func = {
     buf = buf,
+    node = node,
     namespaces = collect_named_parents(buf, node, "namespace_definition", "namespace_identifier"),
     classes = collect_named_parents(buf, node, "class_specifier", "type_identifier"),
     type = "",
@@ -368,7 +335,7 @@ local function parse_function(node, buf)
   if type_qualifier then
     func.type = vim.treesitter.get_node_text(type_qualifier, func.buf) .. " "
   end
-  local type = eat_any_child(scanner, return_types)
+  local type = eat_any_child(scanner, possible_return_types)
   if type then
     func.type = func.type .. vim.treesitter.get_node_text(type, func.buf)
   end
@@ -396,13 +363,13 @@ local function parse_function(node, buf)
   return func
 end
 
-local function run_query(bufnr, node, query_str, opts)
+local function run_query(buf, node, query_str, opts)
   d("running query %s", query_str)
   opts = opts or {}
   local query = vim.treesitter.query.parse("cpp", query_str)
   local functions = {}
-  for _, n in query:iter_captures(node, bufnr) do
-    local func = parse_function(n, bufnr)
+  for _, n in query:iter_captures(node, buf) do
+    local func = parse_function(n, buf)
     if func then
       table.insert(functions, func)
     end
@@ -416,19 +383,14 @@ local function run_query(bufnr, node, query_str, opts)
   return functions
 end
 
-local function node_get_definitions(bufnr, node)
-  return tables.merge_arrays(
-    run_query(bufnr, node, definitions_query()),
-    run_query(bufnr, node, definitions_query("reference_declarator"),
-      { ret_type_reference = true }),
-    run_query(bufnr, node, definitions_query("pointer_declarator"),
-      { ret_type_pointer = true }))
+local function node_get_definitions(buf, node)
+  return run_query(buf, node, "(function_definition) @decl")
 end
 
-local function node_get_declarations(bufnr, node)
+local function node_get_declarations(buf, node)
   return tables.merge_arrays(
-    run_query(bufnr, node, "(field_declaration) @decl"),
-    run_query(bufnr, node, "(declaration) @decl"))
+    run_query(buf, node, "(field_declaration) @decl"),
+    run_query(buf, node, "(declaration) @decl"))
 end
 
 local function is_same_qualified_id(a, b)
@@ -505,54 +467,54 @@ local function is_only_match(sorted_funcs, f)
   return only_match
 end
 
-local function buf_get_declarations(bufnr)
-  bufnr = bufnr or 0
-  local parser = vim.treesitter.get_parser(bufnr, "cpp")
+local function buf_get_declarations(buf)
+  buf = buf or 0
+  local parser = vim.treesitter.get_parser(buf, "cpp")
   local tree = parser:parse()
   local root = tree[1]:root()
-  return node_get_declarations(bufnr, root)
+  return node_get_declarations(buf, root)
 end
 
-local function buf_get_definitions(bufnr)
-  bufnr = bufnr or 0
-  local parser = vim.treesitter.get_parser(bufnr, "cpp")
+local function buf_get_definitions(buf)
+  buf = buf or 0
+  local parser = vim.treesitter.get_parser(buf, "cpp")
   local tree = parser:parse()
   local root = tree[1]:root()
-  return node_get_definitions(bufnr, root)
+  return node_get_definitions(buf, root)
 end
 
 local function update_declaration_node(decl, def)
-  nodes.update_node_text(decl.bufnr, decl.node, declaration_signature(def, decl))
+  nodes.update_node_text(decl.buf, decl.node, declaration_signature(def, decl))
   vim.notify("Updated declaration " .. fully_qualified_name(def))
 end
 
 local function update_definition_node(def, decl)
-  local type_node = nodes.find_child_by_one_of_types(def.node, return_types)
+  local type_node = nodes.find_child_by_one_of_types(def.node, possible_return_types)
   if type_node then
-    d("updating type node %s with %s", debug_node_text(type_node, def.bufnr), decl.type)
-    nodes.update_node_text(def.bufnr, type_node, { decl.type .. " " })
+    d("updating type node %s with %s", debug_node_text(type_node, def.buf), decl.type)
+    nodes.update_node_text(def.buf, type_node, { decl.type .. " " })
   end
   local declarator_node = nodes.find_child_by_one_of_types(def.node,
     { "function_declarator", "reference_declarator", "pointer_declarator" })
   if declarator_node then
-    d("updating declarator node %s", debug_node_text(declarator_node, def.bufnr))
-    nodes.update_node_text(def.bufnr, declarator_node, function_declarator(decl))
+    d("updating declarator node %s", debug_node_text(declarator_node, def.buf))
+    nodes.update_node_text(def.buf, declarator_node, function_declarator(decl))
     vim.notify("Updated definition " .. fully_qualified_name(decl))
   else
     vim.notify("Could not find definition " .. fully_qualified_name(decl), vim.log.levels.ERROR)
   end
 end
 
-function M.sibling_dot_h_header_locator(bufnr)
-  bufnr = bufnr or 0
-  local filename = vim.api.nvim_buf_get_name(bufnr)
+function M.sibling_dot_h_header_locator(buf)
+  buf = buf or 0
+  local filename = vim.api.nvim_buf_get_name(buf)
   return vim.fn.fnamemodify(filename, ":r") .. ".h"
 end
 
-function M.get_declarations(bufnr)
-  bufnr = bufnr or 0
+function M.get_declarations(buf)
+  buf = buf or 0
   local declarations = {}
-  local bufs = get_lib_bufs(bufnr)
+  local bufs = get_lib_bufs(buf)
   for _, b in ipairs(bufs) do
     declarations = tables.merge_arrays(declarations, buf_get_declarations(b))
   end
@@ -591,7 +553,7 @@ function M.insert_definition()
         value = signature,
         ordinal = signature,
         display = signature,
-        filename = vim.api.nvim_buf_get_name(decl.bufnr),
+        filename = vim.api.nvim_buf_get_name(decl.buf),
         lnum = start_line + 1,
         decl = decl,
       }
@@ -633,10 +595,10 @@ function M.declaration_at_cursor()
   return nil
 end
 
-function M.get_definitions(bufnr)
-  bufnr = bufnr or 0
+function M.get_definitions(buf)
+  buf = buf or 0
   local definitions = {}
-  local bufs = get_lib_bufs(bufnr)
+  local bufs = get_lib_bufs(buf)
   for _, b in ipairs(bufs) do
     definitions = tables.merge_arrays(definitions, buf_get_definitions(b))
   end
@@ -661,7 +623,7 @@ function M.update_declaration(definition)
         value = signature,
         ordinal = pair.ordinal,
         display = signature,
-        filename = vim.api.nvim_buf_get_name(decl.bufnr),
+        filename = vim.api.nvim_buf_get_name(decl.buf),
         lnum = start_line + 1,
         decl = decl,
       }
@@ -690,7 +652,7 @@ function M.update_definition(decl)
         value = signature,
         ordinal = pair.ordinal,
         display = signature,
-        filename = vim.api.nvim_buf_get_name(def.bufnr),
+        filename = vim.api.nvim_buf_get_name(def.buf),
         lnum = start_line + 1,
         def = def,
       }
