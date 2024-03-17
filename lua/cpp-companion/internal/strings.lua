@@ -42,4 +42,8 @@ function M.trim(s)
   return string.sub(s, l, r)
 end
 
+function M.starts_with(s, prefix)
+  return string.sub(s, 1, string.len(prefix)) == prefix
+end
+
 return M

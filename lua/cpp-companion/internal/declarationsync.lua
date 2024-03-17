@@ -60,8 +60,11 @@ local function collect_named_parents(buf, node, parent_type, parent_name_type)
     parent_node = nodes.find_parent_by_type(parent_node, parent_type)
     if not parent_node then break end
     local name_node = nodes.find_child_by_type(parent_node, parent_name_type)
-    assert(name_node, "Could not find name node")
-    table.insert(result, 1, vim.treesitter.get_node_text(name_node, buf))
+    local name = ""
+    if name_node then
+      name = vim.treesitter.get_node_text(name_node, buf)
+    end
+    table.insert(result, 1, name)
   end
   return result
 end
@@ -165,7 +168,11 @@ local function declaration_signature(def, decl)
 end
 
 local function function_declarator(decl)
-  local signature = qualifier(decl.classes) .. "::"
+  local signature = qualifier(decl.classes)
+  if #signature > 0 then
+    signature = signature .. "::"
+  end
+  signature = signature
       .. decl.name
       .. decl.params
   if decl.type_qualifier then
@@ -269,7 +276,7 @@ local function unwrap_declarator(node, func)
       end
     else
       error("Unxepected child in function declarator "
-      .. vim.treesitter.get_node_text(node, func.buf))
+        .. vim.treesitter.get_node_text(node, func.buf))
     end
   end
   return node
@@ -277,7 +284,7 @@ end
 
 local function parse_function_declarator(node, func)
   local scanner = make_child_scanner(node)
-  local identifier = eat_any_child(scanner, { "identifier", "field_identifier" })
+  local identifier = eat_any_child(scanner, { "identifier", "field_identifier", "destructor_name" })
   if identifier then
     func.name = vim.treesitter.get_node_text(identifier, func.buf)
   end
@@ -359,6 +366,9 @@ local function parse_function(node, buf)
     parse_function_declarator(declarator, func)
   elseif declarator:type() == "init_declarator" then
     parse_init_declarator(declarator, func)
+  end
+  if strings.starts_with(func.name, "ABSL_") then
+    return nil
   end
   return func
 end
@@ -492,7 +502,7 @@ local function update_definition_node(def, decl)
   local type_node = nodes.find_child_by_one_of_types(def.node, possible_return_types)
   if type_node then
     d("updating type node %s with %s", debug_node_text(type_node, def.buf), decl.type)
-    nodes.update_node_text(def.buf, type_node, { decl.type .. " " })
+    nodes.update_node_text(def.buf, type_node, { decl.type })
   end
   local declarator_node = nodes.find_child_by_one_of_types(def.node,
     { "function_declarator", "reference_declarator", "pointer_declarator" })
@@ -529,7 +539,7 @@ function M.insert_definition()
     local pos = vim.api.nvim_win_get_cursor(0)
     local lines_from_bottom = 2 -- } and line above
     if has_return then
-      lines_from_bottom = 3 -- }, return statement and line above
+      lines_from_bottom = 3     -- }, return statement and line above
     end
     pos[1] = pos[1] + #body - lines_from_bottom
     vim.api.nvim_win_set_cursor(0, pos)
@@ -564,11 +574,13 @@ function M.insert_definition()
   })
 end
 
-function M.definition_at_cursor()
-  local node = nodes.get_node_at_cursor()
+function M.definition_at_cursor(win)
+  win = win or 0
+  local buf = vim.api.nvim_win_get_buf(win)
+  local node = nodes.get_node_at_cursor(win)
   local func = nodes.find_parent_by_type(node, "function_definition")
   if func then
-    local definitions = node_get_definitions(0, func)
+    local definitions = node_get_definitions(buf, func)
     if #definitions == 1 then
       return definitions[1]
     end
@@ -576,18 +588,20 @@ function M.definition_at_cursor()
   return nil
 end
 
-function M.declaration_at_cursor()
-  local node = nodes.get_node_at_cursor()
+function M.declaration_at_cursor(win)
+  win = win or 0
+  local buf = vim.api.nvim_win_get_buf(win)
+  local node = nodes.get_node_at_cursor(win)
   local field_node = nodes.find_parent_by_type(node, "field_declaration")
   if field_node then
-    local declarations = node_get_declarations(0, field_node)
+    local declarations = node_get_declarations(buf, field_node)
     if #declarations == 1 then
       return declarations[1]
     end
   end
   local declaration_node = nodes.find_parent_by_type(node, "declaration")
   if declaration_node then
-    local declarations = node_get_declarations(0, declaration_node)
+    local declarations = node_get_declarations(buf, declaration_node)
     if #declarations == 1 then
       return declarations[1]
     end
@@ -606,7 +620,7 @@ function M.get_definitions(buf)
 end
 
 function M.update_declaration(definition)
-  local declarations = M.get_declarations()
+  local declarations = M.get_declarations(definition.buf)
   sort_functions(declarations, definition)
   if is_only_match(declarations, definition) then
     update_declaration_node(declarations[1], definition)
@@ -635,7 +649,7 @@ function M.update_declaration(definition)
 end
 
 function M.update_definition(decl)
-  local definitions = M.get_definitions()
+  local definitions = M.get_definitions(decl.buf)
   sort_functions(definitions, decl)
   if is_only_match(definitions, decl) then
     update_definition_node(definitions[1], decl)
@@ -663,13 +677,14 @@ function M.update_definition(decl)
   })
 end
 
-function M.sync_declaration_and_definition()
-  local definition = M.definition_at_cursor()
+function M.sync_declaration_and_definition(win)
+  win = win or 0
+  local definition = M.definition_at_cursor(win)
   if definition then
     M.update_declaration(definition)
     return
   end
-  local declaration = M.declaration_at_cursor()
+  local declaration = M.declaration_at_cursor(win)
   if declaration then
     M.update_definition(declaration)
     return
