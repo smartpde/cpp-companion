@@ -338,6 +338,10 @@ local function parse_function(node, buf)
     has_semicolon = string.sub(vim.treesitter.get_node_text(node, buf), -1) == ";",
   }
   local scanner = make_child_scanner(node)
+  local storage_class = eat_child(scanner, "storage_class_specifier")
+  if storage_class then
+    func.storage_class = vim.treesitter.get_node_text(storage_class, func.buf)
+  end
   local type_qualifier = eat_child(scanner, "type_qualifier")
   if type_qualifier then
     func.type = vim.treesitter.get_node_text(type_qualifier, func.buf) .. " "

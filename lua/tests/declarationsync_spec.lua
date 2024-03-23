@@ -220,6 +220,17 @@ class C2 {
           "n1 void C1::C2::Func()",
         })
     end)
+
+    it("static declaration in class", function()
+      check_declarations([[
+class C {
+  static void Func();
+}
+]],
+        {
+          "static void C::Func()",
+        })
+    end)
   end)
 
   describe("finds definitions", function()
