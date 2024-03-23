@@ -403,7 +403,7 @@ local function parse_function(node, buf)
     }),
     type = "",
     name = "",
-    params = "",
+    params = {},
     has_semicolon = string.sub(vim.treesitter.get_node_text(node, buf), -1) == ";",
   }
   local scanner = make_child_scanner(node)
