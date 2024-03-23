@@ -19,6 +19,7 @@ local possible_return_types = { "primitive_type", "qualified_identifier",
   "template_type", "type_identifier" }
 local possible_declarators = { "ERROR", "pointer_declarator",
   "reference_declarator", "function_declarator", "init_declarator" }
+local possible_types = { "primitive_type", "type_identifier", "qualified_identifier" }
 
 local function get_lib_bufs(buf)
   local bufs = {}
@@ -106,11 +107,26 @@ local function fully_qualified_name(f)
   return name .. f.name
 end
 
-local function display_params(params)
-  params = string.gsub(params, "\n+", " ")
-  params = strings.unsurround(params, "(", ")")
-  params = strings.trim(params)
-  return strings.surround(params, "(", ")")
+local function format_params(params, with_default_values)
+  local s = ""
+  for _, p in ipairs(params) do
+    if #s > 0 then
+      s = s .. ", "
+    end
+    if p.type_qualifier then
+      s = s .. p.type_qualifier .. " "
+    end
+    if p.type then
+      s = s .. p.type
+    end
+    if p.declarator then
+      s = s .. " " .. p.declarator
+    end
+    if with_default_values and p.default_value then
+      s = s .. " = " .. p.default_value
+    end
+  end
+  return s
 end
 
 local function guess_return_value(type)
@@ -126,7 +142,7 @@ local function definition_signature(decl)
   if classes ~= "" then
     signature = signature .. classes .. "::"
   end
-  signature = signature .. decl.name .. decl.params
+  signature = signature .. decl.name .. "(" .. format_params(decl.params, false) .. ")"
   if decl.type_qualifier then
     signature = signature .. " " .. decl.type_qualifier
   end
@@ -164,7 +180,7 @@ local function declaration_signature(def, decl)
       .. def.type
       .. " "
       .. def.name
-      .. def.params
+      .. "(" .. format_params(def.params, true) .. ")"
   if def.type_qualifier then
     signature = signature .. " " .. def.type_qualifier
   end
@@ -181,7 +197,7 @@ local function function_declarator(decl)
   end
   signature = signature
       .. decl.name
-      .. decl.params
+      .. "(" .. format_params(decl.params) .. ")"
   if decl.type_qualifier then
     signature = signature .. " " .. decl.type_qualifier
   end
@@ -205,7 +221,7 @@ function M.func_display(func)
   if classes ~= "" then
     signature = signature .. classes .. "::"
   end
-  signature = signature .. func.name .. display_params(func.params)
+  signature = signature .. func.name .. "(" .. format_params(func.params, true) .. ")"
   if func.type_qualifier then
     signature = signature .. " " .. func.type_qualifier
   end
@@ -236,23 +252,32 @@ local function make_child_scanner(node)
 end
 
 local function eat_child(scanner, node_type)
-  if scanner.index >= scanner.node:child_count() then
+  if scanner.index >= scanner.node:named_child_count() then
     return nil
   end
-  local child = scanner.node:child(scanner.index)
+  local child = scanner.node:named_child(scanner.index)
+  scanner.index = scanner.index + 1
+  return child
+end
+
+local function eat_child_of_type(scanner, node_type)
+  if scanner.index >= scanner.node:named_child_count() then
+    return nil
+  end
+  local child = scanner.node:named_child(scanner.index)
   if child:type() == node_type then
     scanner.index = scanner.index + 1
     return child
   end
-  d("eat_child %s but found %s", node_type, child:type())
+  d("eat_child_of_type %s but found %s", node_type, child:type())
   return nil
 end
 
 local function eat_any_child(scanner, node_types)
-  if scanner.index >= scanner.node:child_count() then
+  if scanner.index >= scanner.node:named_child_count() then
     return nil
   end
-  local child = scanner.node:child(scanner.index)
+  local child = scanner.node:named_child(scanner.index)
   for _, node_type in ipairs(node_types) do
     if child:type() == node_type then
       scanner.index = scanner.index + 1
@@ -289,13 +314,45 @@ local function unwrap_declarator(node, func)
   return node
 end
 
+local function parse_parameters(parameter_list_node, buf)
+  local params = {}
+  local scanner = make_child_scanner(parameter_list_node)
+  while true do
+    local param = {}
+    local param_node = eat_any_child(scanner, { "parameter_declaration", "optional_parameter_declaration" })
+    if not param_node then
+      break
+    end
+    local param_scanner = make_child_scanner(param_node)
+    local type_qualifier = eat_child_of_type(param_scanner, "type_qualifier")
+    if type_qualifier then
+      param.type_qualifier = vim.treesitter.get_node_text(type_qualifier, buf)
+    end
+    local type = eat_any_child(param_scanner, possible_types)
+    if type then
+      param.type = vim.treesitter.get_node_text(type, buf)
+    end
+    local declarator = eat_any_child(param_scanner, {"identifier", "pointer_declarator", "reference_declarator"})
+    if declarator then
+      param.declarator = vim.treesitter.get_node_text(declarator, buf)
+    end
+    -- Any trailing child in the end of the signature is the default value.
+    local default_value = eat_child(param_scanner)
+    if default_value then
+      param.default_value = vim.treesitter.get_node_text(default_value, buf)
+    end
+    table.insert(params, param)
+  end
+  return params
+end
+
 local function parse_function_declarator(node, func)
   local scanner = make_child_scanner(node)
   local identifier = eat_any_child(scanner, { "identifier", "field_identifier", "destructor_name" })
   if identifier then
     func.name = vim.treesitter.get_node_text(identifier, func.buf)
   end
-  local qualified_identifier = eat_child(scanner, "qualified_identifier")
+  local qualified_identifier = eat_child_of_type(scanner, "qualified_identifier")
   if qualified_identifier then
     local parts = vim.split(vim.treesitter.get_node_text(
       qualified_identifier, func.buf), "::")
@@ -304,11 +361,11 @@ local function parse_function_declarator(node, func)
     end
     func.name = parts[#parts]
   end
-  local params = eat_child(scanner, "parameter_list")
+  local params = eat_child_of_type(scanner, "parameter_list")
   if params then
-    func.params = vim.treesitter.get_node_text(params, func.buf)
+    func.params = parse_parameters(params, func.buf)
   end
-  local type_qualifier = eat_child(scanner, "type_qualifier")
+  local type_qualifier = eat_child_of_type(scanner, "type_qualifier")
   if type_qualifier then
     func.type_qualifier = vim.treesitter.get_node_text(type_qualifier, func.buf)
   end
@@ -316,15 +373,15 @@ end
 
 local function parse_init_declarator(node, func)
   local scanner = make_child_scanner(node)
-  local identifier = eat_child(scanner, "identifier")
+  local identifier = eat_child_of_type(scanner, "identifier")
   if identifier then
     func.name = vim.treesitter.get_node_text(identifier, func.buf)
   end
-  local params = eat_child(scanner, "argument_list")
+  local params = eat_child_of_type(scanner, "argument_list")
   if params then
-    func.params = vim.treesitter.get_node_text(params, func.buf)
+    func.params = parse_parameters(params, func.buf)
   end
-  local type_qualifier = eat_child(scanner, "type_qualifier")
+  local type_qualifier = eat_child_of_type(scanner, "type_qualifier")
   if type_qualifier then
     func.type_qualifier = vim.treesitter.get_node_text(type_qualifier, func.buf)
   end
@@ -350,11 +407,11 @@ local function parse_function(node, buf)
     has_semicolon = string.sub(vim.treesitter.get_node_text(node, buf), -1) == ";",
   }
   local scanner = make_child_scanner(node)
-  local storage_class = eat_child(scanner, "storage_class_specifier")
+  local storage_class = eat_child_of_type(scanner, "storage_class_specifier")
   if storage_class then
     func.storage_class = vim.treesitter.get_node_text(storage_class, func.buf)
   end
-  local type_qualifier = eat_child(scanner, "type_qualifier")
+  local type_qualifier = eat_child_of_type(scanner, "type_qualifier")
   if type_qualifier then
     func.type = vim.treesitter.get_node_text(type_qualifier, func.buf) .. " "
   end
@@ -366,7 +423,7 @@ local function parse_function(node, buf)
   if not declarator then
     -- special case for `void Func() ABSL_GUARDED_BY(mutex)`
     -- this is not a valid syntax, but a common one
-    local error_declarator = eat_child(scanner, "ERROR")
+    local error_declarator = eat_child_of_type(scanner, "ERROR")
     if error_declarator then
       declarator = nodes.find_child_by_type(error_declarator, "init_declarator")
     end
@@ -383,6 +440,7 @@ local function parse_function(node, buf)
   elseif declarator:type() == "init_declarator" then
     parse_init_declarator(declarator, func)
   end
+  -- Ignore absl thread annotations, etc.
   if strings.starts_with(func.name, "ABSL_") then
     return nil
   end

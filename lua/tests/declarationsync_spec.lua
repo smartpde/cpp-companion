@@ -314,6 +314,18 @@ class C {
   }
 ]])
     end)
+
+    it("updates definition without default param values", function()
+      check_sync([[
+  void func(int a, int b = 2, int c = {}, ind d = func(), int* e = nullptr^);
+  void func(double d) {
+  }
+]], [[
+  void func(int a, int b = 2, int c = {}, ind d = func(), int* e = nullptr);
+  void func(int a, int b, int c, ind d, int * e) {
+  }
+]])
+    end)
   end)
 
   it("skips non function declarations and definitions", function()
