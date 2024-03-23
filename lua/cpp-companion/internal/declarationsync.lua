@@ -53,18 +53,25 @@ local function get_lib_bufs(buf)
   return bufs
 end
 
-local function collect_named_parents(buf, node, parent_type, parent_name_type)
+local function collect_named_parents(buf, node, parent_specs)
   local result = {}
-  local parent_node = node
+  node = node:parent()
   while true do
-    parent_node = nodes.find_parent_by_type(parent_node, parent_type)
-    if not parent_node then break end
-    local name_node = nodes.find_child_by_type(parent_node, parent_name_type)
-    local name = ""
-    if name_node then
-      name = vim.treesitter.get_node_text(name_node, buf)
+    if not node then
+      break
     end
-    table.insert(result, 1, name)
+    for _, spec in ipairs(parent_specs) do
+      if node:type() == spec.parent_type then
+        local name_node = nodes.find_child_by_type(node, spec.name_node_type)
+        local name = ""
+        if name_node then
+          name = vim.treesitter.get_node_text(name_node, buf)
+        end
+        table.insert(result, 1, name)
+        break
+      end
+    end
+    node = node:parent()
   end
   return result
 end
@@ -330,8 +337,13 @@ local function parse_function(node, buf)
   local func = {
     buf = buf,
     node = node,
-    namespaces = collect_named_parents(buf, node, "namespace_definition", "namespace_identifier"),
-    classes = collect_named_parents(buf, node, "class_specifier", "type_identifier"),
+    namespaces = collect_named_parents(buf, node, {
+      { parent_type = "namespace_definition", name_node_type = "namespace_identifier" },
+    }),
+    classes = collect_named_parents(buf, node, {
+      { parent_type = "class_specifier",  name_node_type = "type_identifier" },
+      { parent_type = "struct_specifier", name_node_type = "type_identifier" },
+    }),
     type = "",
     name = "",
     params = "",

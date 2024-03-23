@@ -231,6 +231,19 @@ class C {
           "static void C::Func()",
         })
     end)
+
+    it("struct inside class", function()
+      check_declarations([[
+class C {
+  struct S {
+    void Func();
+  };
+};
+]],
+        {
+          "void C::S::Func()",
+        })
+    end)
   end)
 
   describe("finds definitions", function()

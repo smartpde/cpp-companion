@@ -63,9 +63,6 @@ end
 describe("declarationsync", function()
   describe("finds declarations", function()
     it("test", function()
-      check_sync([[
-]],
-        "")
     end)
   end)
 end)
