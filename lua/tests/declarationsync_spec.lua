@@ -126,19 +126,23 @@ void Func() const;
 
     it("with thread annotation", function()
       check_declarations([[
-void Func() ABSL_GUARDED_BY(mutex_);
+class C {
+  void Func() ABSL_GUARDED_BY(mutex_);
+};
 ]],
         {
-          "void Func()",
+          "void C::Func()",
         })
     end)
 
     it("with thread annotation and param", function()
       check_declarations([[
-void Func(int a) ABSL_GUARDED_BY(mutex_);
+class C {
+  void Func(int a) ABSL_GUARDED_BY(mutex_);
+};
 ]],
         {
-          "void Func(int a)",
+          "void C::Func(int a)",
         })
     end)
 

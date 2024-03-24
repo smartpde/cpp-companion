@@ -60,9 +60,11 @@ local function check_sync(code, expected_code)
 end
 
 
-describe("declarationsync", function()
+describe("test", function()
   describe("finds declarations", function()
     it("test", function()
+      check_declarations([[
+      ]], {})
     end)
   end)
 end)

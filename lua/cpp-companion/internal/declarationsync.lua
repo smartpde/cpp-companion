@@ -18,7 +18,7 @@ end
 local possible_return_types = { "primitive_type", "qualified_identifier",
   "template_type", "type_identifier" }
 local possible_declarators = { "ERROR", "pointer_declarator",
-  "reference_declarator", "function_declarator", "init_declarator" }
+  "reference_declarator", "function_declarator" }
 local possible_types = { "primitive_type", "type_identifier", "qualified_identifier" }
 
 local function get_lib_bufs(buf)
@@ -290,7 +290,6 @@ end
 
 local function unwrap_declarator(node, func)
   while node and node:type() ~= "function_declarator"
-    and node:type() ~= "init_declarator"
   do
     if node:type() == "pointer_declarator" then
       func.type = func.type .. "*"
@@ -301,8 +300,7 @@ local function unwrap_declarator(node, func)
     elseif node:type() == "ERROR" then
       -- special case for `type* Func() ABSL_GUARDED_BY(mutex)`, which is not
       -- a valid syntax
-      local declarator = nodes.find_child_by_one_of_types(node,
-        { "function_declarator", "init_declarator" })
+      local declarator = nodes.find_child_by_type(node, "function_declarator")
       if declarator then
         return declarator
       end
@@ -332,7 +330,7 @@ local function parse_parameters(parameter_list_node, buf)
     if type then
       param.type = vim.treesitter.get_node_text(type, buf)
     end
-    local declarator = eat_any_child(param_scanner, {"identifier", "pointer_declarator", "reference_declarator"})
+    local declarator = eat_any_child(param_scanner, { "identifier", "pointer_declarator", "reference_declarator" })
     if declarator then
       param.declarator = vim.treesitter.get_node_text(declarator, buf)
     end
@@ -362,25 +360,10 @@ local function parse_function_declarator(node, func)
     func.name = parts[#parts]
   end
   local params = eat_child_of_type(scanner, "parameter_list")
-  if params then
-    func.params = parse_parameters(params, func.buf)
+  if not params then
+    return nil
   end
-  local type_qualifier = eat_child_of_type(scanner, "type_qualifier")
-  if type_qualifier then
-    func.type_qualifier = vim.treesitter.get_node_text(type_qualifier, func.buf)
-  end
-end
-
-local function parse_init_declarator(node, func)
-  local scanner = make_child_scanner(node)
-  local identifier = eat_child_of_type(scanner, "identifier")
-  if identifier then
-    func.name = vim.treesitter.get_node_text(identifier, func.buf)
-  end
-  local params = eat_child_of_type(scanner, "argument_list")
-  if params then
-    func.params = parse_parameters(params, func.buf)
-  end
+  func.params = parse_parameters(params, func.buf)
   local type_qualifier = eat_child_of_type(scanner, "type_qualifier")
   if type_qualifier then
     func.type_qualifier = vim.treesitter.get_node_text(type_qualifier, func.buf)
@@ -416,18 +399,11 @@ local function parse_function(node, buf)
     func.type = vim.treesitter.get_node_text(type_qualifier, func.buf) .. " "
   end
   local type = eat_any_child(scanner, possible_return_types)
-  if type then
-    func.type = func.type .. vim.treesitter.get_node_text(type, func.buf)
+  if not type then
+    return nil
   end
+  func.type = func.type .. vim.treesitter.get_node_text(type, func.buf)
   local declarator = eat_any_child(scanner, possible_declarators)
-  if not declarator then
-    -- special case for `void Func() ABSL_GUARDED_BY(mutex)`
-    -- this is not a valid syntax, but a common one
-    local error_declarator = eat_child_of_type(scanner, "ERROR")
-    if error_declarator then
-      declarator = nodes.find_child_by_type(error_declarator, "init_declarator")
-    end
-  end
   if not declarator then
     return nil
   end
@@ -437,8 +413,6 @@ local function parse_function(node, buf)
   end
   if declarator:type() == "function_declarator" then
     parse_function_declarator(declarator, func)
-  elseif declarator:type() == "init_declarator" then
-    parse_init_declarator(declarator, func)
   end
   -- Ignore absl thread annotations, etc.
   if strings.starts_with(func.name, "ABSL_") then
