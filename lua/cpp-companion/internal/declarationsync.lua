@@ -271,7 +271,7 @@ local function make_child_scanner(node)
   return { node = node, index = 0 }
 end
 
-local function eat_child(scanner, node_type)
+local function eat_child(scanner)
   if scanner.index >= scanner.node:named_child_count() then
     return nil
   end
@@ -401,7 +401,7 @@ local function parse_function(node, buf)
       { parent_type = "class_specifier",  name_node_type = "type_identifier" },
       { parent_type = "struct_specifier", name_node_type = "type_identifier" },
     }),
-    type = "",
+    type = "",  -- could remain empty for constructors/destructors
     name = "",
     params = {},
     has_semicolon = string.sub(vim.treesitter.get_node_text(node, buf), -1) == ";",
@@ -416,10 +416,9 @@ local function parse_function(node, buf)
     func.type = vim.treesitter.get_node_text(type_qualifier, func.buf) .. " "
   end
   local type = eat_any_child(scanner, possible_return_types)
-  if not type then
-    return nil
+  if type then
+    func.type = func.type .. vim.treesitter.get_node_text(type, func.buf)
   end
-  func.type = func.type .. vim.treesitter.get_node_text(type, func.buf)
   local declarator = eat_any_child(scanner, possible_declarators)
   if not declarator then
     return nil

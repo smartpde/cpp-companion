@@ -307,7 +307,7 @@ class C {
 ]])
     end)
 
-    it("updates definition", function()
+    it("syncs", function()
       check_sync([[
   void func(int a^);
   void func(double d) {
@@ -319,7 +319,7 @@ class C {
 ]])
     end)
 
-    it("updates definition without default param values", function()
+    it("definition without default param values", function()
       check_sync([[
   void func(int a, int b = 2, int c = {}, ind d = func(), int* e = nullptr^);
   void func(double d) {
@@ -331,7 +331,7 @@ class C {
 ]])
     end)
 
-    it("updates declaration keeping default values", function()
+    it("declaration keeping default values", function()
       check_sync([[
   void func(int a, int b = 2, int c = 3);
   void func(int a_new^, int b, int c) {
@@ -340,6 +340,34 @@ class C {
   void func(int a_new, int b = 2, int c = 3);
   void func(int a_new, int b, int c) {
   }
+]])
+    end)
+
+    it("constructor declaration", function()
+      check_sync([[
+class C {
+  C(int a);
+};
+C::C(double d^) {}
+]], [[
+class C {
+  C(double d);
+};
+C::C(double d) {}
+]])
+    end)
+
+    it("constructor definition", function()
+      check_sync([[
+class C {
+  C(int a^);
+};
+C::C(double d) {}
+]], [[
+class C {
+  C(int a);
+};
+C::C(int a) {}
 ]])
     end)
   end)
