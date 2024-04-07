@@ -54,7 +54,7 @@ local function check_sync(code, expected_code)
   local buf = make_code_buf(lines)
   local win = vim.api.nvim_open_win(buf, false, { height = 100, width = 100, relative = "editor", row = 1, col = 1 })
   vim.api.nvim_win_set_cursor(win, { row, col - 1 })
-  declarationsync.sync_declaration_and_definition(win)
+  declarationsync.sync_declaration_and_definition(buf)
   local new_lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
   assert.are.same(trim_lines(new_lines), trim_text(expected_code))
 end

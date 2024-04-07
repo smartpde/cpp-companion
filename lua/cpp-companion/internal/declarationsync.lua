@@ -8,6 +8,12 @@ local d = dlog.logger("cpp-companion")
 
 local M = {}
 
+local possible_return_types = { "primitive_type", "qualified_identifier",
+  "template_type", "type_identifier" }
+local possible_declarators = { "ERROR", "pointer_declarator",
+  "reference_declarator", "function_declarator" }
+local possible_types = { "primitive_type", "type_identifier", "qualified_identifier" }
+
 local function debug_node_text(node, buf)
   if dlog.is_enabled("cpp-companion") then
     return vim.treesitter.get_node_text(node, buf)
@@ -15,11 +21,14 @@ local function debug_node_text(node, buf)
   return ""
 end
 
-local possible_return_types = { "primitive_type", "qualified_identifier",
-  "template_type", "type_identifier" }
-local possible_declarators = { "ERROR", "pointer_declarator",
-  "reference_declarator", "function_declarator" }
-local possible_types = { "primitive_type", "type_identifier", "qualified_identifier" }
+local function find_buf_win(buf)
+  for _, win in ipairs(vim.api.nvim_list_wins()) do
+    if vim.api.nvim_win_get_buf(win) == buf then
+      return win
+    end
+  end
+  return -1
+end
 
 local function get_lib_bufs(buf)
   local bufs = {}
@@ -638,9 +647,13 @@ function M.insert_definition()
   })
 end
 
-function M.definition_at_cursor(win)
-  win = win or 0
-  local buf = vim.api.nvim_win_get_buf(win)
+function M.definition_at_cursor(buf)
+  buf = buf or 0
+  local win = find_buf_win(buf)
+  if win < 0 then
+    vim.notify("Could not find window displaying buffer " .. buf, vim.log.levels.ERROR)
+    return
+  end
   local node = nodes.get_node_at_cursor(win)
   local func = nodes.find_parent_by_type(node, "function_definition")
   if func then
@@ -652,9 +665,13 @@ function M.definition_at_cursor(win)
   return nil
 end
 
-function M.declaration_at_cursor(win)
-  win = win or 0
-  local buf = vim.api.nvim_win_get_buf(win)
+function M.declaration_at_cursor(buf)
+  buf = buf or 0
+  local win = find_buf_win(buf)
+  if win < 0 then
+    vim.notify("Could not find window displaying buffer " .. buf, vim.log.levels.ERROR)
+    return
+  end
   local node = nodes.get_node_at_cursor(win)
   local field_node = nodes.find_parent_by_type(node, "field_declaration")
   if field_node then
@@ -741,19 +758,22 @@ function M.update_definition(decl)
   })
 end
 
-function M.sync_declaration_and_definition(win)
-  win = win or 0
-  local definition = M.definition_at_cursor(win)
+function M.sync_declaration_and_definition(buf)
+  buf = buf or 0
+  local definition = M.definition_at_cursor(buf)
   if definition then
     M.update_declaration(definition)
     return
   end
-  local declaration = M.declaration_at_cursor(win)
+  local declaration = M.declaration_at_cursor(buf)
   if declaration then
     M.update_definition(declaration)
     return
   end
   vim.notify("Could not find a single function definition or declaration at the cursor position", vim.log.levels.INFO)
+end
+
+function M.copy_declaration_or_definition()
 end
 
 return M
