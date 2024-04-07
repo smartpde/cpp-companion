@@ -129,6 +129,25 @@ local function format_params(params, with_default_values)
   return s
 end
 
+local function make_declaration_params(decl, def)
+  local params = {}
+  for _, p in ipairs(def.params) do
+    local default_value = nil
+    for _, decl_p in ipairs(decl.params) do
+      if decl_p.declarator == p.declarator then
+        default_value = decl_p.default_value
+      end
+    end
+    table.insert(params, {
+      type_qualifier = p.type_qualifier,
+      type = p.type,
+      declarator = p.declarator,
+      default_value = default_value,
+    })
+  end
+  return params
+end
+
 local function guess_return_value(type)
   if type == "absl::Status" then
     return "absl::OkStatus()"
@@ -176,11 +195,12 @@ local function declaration_signature(def, decl)
     end
     signature = signature .. decl.storage_class .. " "
   end
+  local decl_params = make_declaration_params(decl, def)
   signature = signature
       .. def.type
       .. " "
       .. def.name
-      .. "(" .. format_params(def.params, true) .. ")"
+      .. "(" .. format_params(decl_params, true) .. ")"
   if def.type_qualifier then
     signature = signature .. " " .. def.type_qualifier
   end

@@ -330,6 +330,18 @@ class C {
   }
 ]])
     end)
+
+    it("updates declaration keeping default values", function()
+      check_sync([[
+  void func(int a, int b = 2, int c = 3);
+  void func(int a_new^, int b, int c) {
+  }
+]], [[
+  void func(int a_new, int b = 2, int c = 3);
+  void func(int a_new, int b, int c) {
+  }
+]])
+    end)
   end)
 
   it("skips non function declarations and definitions", function()
