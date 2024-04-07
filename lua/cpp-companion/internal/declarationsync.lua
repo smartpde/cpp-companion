@@ -22,6 +22,9 @@ local function debug_node_text(node, buf)
 end
 
 local function find_buf_win(buf)
+  if buf == 0 then
+    return vim.api.nvim_get_current_win()
+  end
   for _, win in ipairs(vim.api.nvim_list_wins()) do
     if vim.api.nvim_win_get_buf(win) == buf then
       return win
@@ -467,13 +470,21 @@ local function run_query(buf, node, query_str, opts)
 end
 
 local function node_get_definitions(buf, node)
-  return run_query(buf, node, "(function_definition) @decl")
+  local funcs = run_query(buf, node, "(function_definition) @decl")
+  for _, f in ipairs(funcs) do
+    f.is_definition = true
+  end
+  return funcs
 end
 
 local function node_get_declarations(buf, node)
-  return tables.merge_arrays(
+  local funcs = tables.merge_arrays(
     run_query(buf, node, "(field_declaration) @decl"),
     run_query(buf, node, "(declaration) @decl"))
+  for _, f in ipairs(funcs) do
+    f.is_declaration = true
+  end
+  return funcs
 end
 
 local function is_same_qualified_id(a, b)
@@ -700,80 +711,84 @@ function M.get_definitions(buf)
   return definitions
 end
 
-function M.update_declaration(definition)
-  local declarations = M.get_declarations(definition.buf)
-  sort_functions(declarations, definition)
-  if is_only_match(declarations, definition) then
-    update_declaration_node(declarations[1], definition)
+function find_counterpart(func, cb)
+  local candidates
+  if func.is_declaration then
+    candidates = M.get_definitions(func.buf)
+  else
+    candidates = M.get_declarations(func.buf)
+  end
+  sort_functions(candidates, func)
+  if is_only_match(candidates, func) then
+    cb(candidates[1])
     return
   end
+  local prompt
+  if func.is_declaration then
+    prompt = "Select definition to update"
+  else
+    prompt = "Select declaration to update"
+  end
   selection.select({
-    prompt = "Select declaration to update",
-    values = selection.to_ordinal_pairs(declarations),
+    prompt = prompt,
+    values = selection.to_ordinal_pairs(candidates),
     entry_func = function(pair)
-      local decl = pair.item
-      local signature = M.func_display(decl)
-      local start_line = decl.node:start()
+      local func = pair.item
+      local signature = M.func_display(func)
+      local start_line = func.node:start()
       return {
         value = signature,
         ordinal = pair.ordinal,
         display = signature,
-        filename = vim.api.nvim_buf_get_name(decl.buf),
+        filename = vim.api.nvim_buf_get_name(func.buf),
         lnum = start_line + 1,
-        decl = decl,
+        func = func,
       }
     end,
     on_selected = function(entry)
-      update_declaration_node(entry.decl, definition)
-    end,
-  })
-end
-
-function M.update_definition(decl)
-  local definitions = M.get_definitions(decl.buf)
-  sort_functions(definitions, decl)
-  if is_only_match(definitions, decl) then
-    update_definition_node(definitions[1], decl)
-    return
-  end
-  selection.select({
-    prompt = "Select definition to update",
-    values = selection.to_ordinal_pairs(definitions),
-    entry_func = function(pair)
-      local def = pair.item
-      local signature = M.func_display(def)
-      local start_line = def.node:start()
-      return {
-        value = signature,
-        ordinal = pair.ordinal,
-        display = signature,
-        filename = vim.api.nvim_buf_get_name(def.buf),
-        lnum = start_line + 1,
-        def = def,
-      }
-    end,
-    on_selected = function(entry)
-      update_definition_node(entry.def, decl)
+      cb(entry.func)
     end,
   })
 end
 
 function M.sync_declaration_and_definition(buf)
   buf = buf or 0
-  local definition = M.definition_at_cursor(buf)
-  if definition then
-    M.update_declaration(definition)
+  local func = M.definition_at_cursor(buf)
+  if not func then
+    func = M.declaration_at_cursor(buf)
+  end
+  if not func then
+    vim.notify("Could not find a single function definition or declaration at the cursor position", vim.log.levels.INFO)
     return
   end
-  local declaration = M.declaration_at_cursor(buf)
-  if declaration then
-    M.update_definition(declaration)
-    return
-  end
-  vim.notify("Could not find a single function definition or declaration at the cursor position", vim.log.levels.INFO)
+  find_counterpart(func, function(counterpart)
+    if func.is_declaration then
+      update_definition_node(counterpart, func)
+    else
+      update_declaration_node(counterpart, func)
+    end
+  end)
 end
 
-function M.copy_declaration_or_definition()
+function M.copy_declaration_or_definition(buf)
+  buf = buf or 0
+  local func = M.definition_at_cursor(buf)
+  if not func then
+    func = M.declaration_at_cursor(buf)
+  end
+  if not func then
+    vim.notify("Could not find a single function definition or declaration at the cursor position", vim.log.levels.INFO)
+    return
+  end
+  local signature
+  if func.is_declaration then
+    signature = definition_body(func)
+  else
+    -- Small hack, just pretending that definition is the declaration too.
+    signature = declaration_signature(func, func)
+  end
+  vim.fn.setreg(config.get().copy_register, signature)
+  vim.notify("Copied signature for function " .. M.func_display(func), vim.log.levels.INFO)
 end
 
 return M

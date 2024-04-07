@@ -12,6 +12,8 @@ end
 
 M.sync_declaration_and_definition = decl_sync.sync_declaration_and_definition
 
+M.copy_declaration_or_definition = decl_sync.copy_declaration_or_definition
+
 M.insert_definition = decl_sync.insert_definition
 
 return M

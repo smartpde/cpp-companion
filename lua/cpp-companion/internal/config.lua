@@ -3,6 +3,7 @@ local M = {}
 local defaults = {
   header_extensions = {"h"},
   source_extensions = {"cc"},
+  copy_register = "+",
   enable_debugging = false,
 }
 
