@@ -344,4 +344,13 @@ class C {
         "int Func()",
       })
   end)
+
+  it("skips template variable guarded by mutex", function()
+    check_declarations([[
+class C {
+  std::optional<O> field_ ABSL_GUARDED_BY(mutex);
+};
+]],
+      {})
+  end)
 end)

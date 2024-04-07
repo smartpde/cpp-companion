@@ -300,10 +300,7 @@ local function unwrap_declarator(node, func)
     elseif node:type() == "ERROR" then
       -- special case for `type* Func() ABSL_GUARDED_BY(mutex)`, which is not
       -- a valid syntax
-      local declarator = nodes.find_child_by_type(node, "function_declarator")
-      if declarator then
-        return declarator
-      end
+      return nodes.find_child_by_type(node, "function_declarator")
     else
       error("Unxepected child in function declarator "
         .. vim.treesitter.get_node_text(node, func.buf))

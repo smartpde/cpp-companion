@@ -59,7 +59,6 @@ local function check_sync(code, expected_code)
   assert.are.same(trim_lines(new_lines), trim_text(expected_code))
 end
 
-
 describe("test", function()
   describe("finds declarations", function()
     it("test", function()
